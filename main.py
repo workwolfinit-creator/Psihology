@@ -1,6 +1,7 @@
 import flet as ft
 import asyncio
 import random
+import math
 
 async def main(page: ft.Page):
     # --- НАСТРОЙКИ ---
@@ -19,7 +20,8 @@ async def main(page: ft.Page):
     state = {
         "running": False,
         "score": 0,
-        "speed": 3,
+        "speed": 3.0,
+        "speed_doubled": False,
         "p_col": 2,
         "p_row": 0,
         "enemies": [],
@@ -28,7 +30,7 @@ async def main(page: ft.Page):
     }
 
     # --- ВИЗУАЛ ---
-    combo_text = ft.Text("", size=40, weight="bold", color="#FFFF00", opacity=0, animate_opacity=200)
+    combo_text = ft.Text("", size=40, weight="bold", color="#FFFF00", opacity=0, animate_opacity=True)
     score_text = ft.Text("0", size=100, weight="bold", color="#FFFFFF1A", text_align="center")
 
     def create_checker(color, glow_color):
@@ -36,14 +38,14 @@ async def main(page: ft.Page):
             width=PLAYER_SIZE,
             height=PLAYER_SIZE,
             bgcolor=color,
-            border_radius=ft.BorderRadius.all(50),
+            border_radius=50,
             shadow=ft.BoxShadow(spread_radius=2, blur_radius=15, color=glow_color),
-            alignment=ft.alignment.Alignment(0, 0),
+            alignment=ft.Alignment(0, 0),
             content=ft.Container(
                 width=PLAYER_SIZE * 0.6,
                 height=PLAYER_SIZE * 0.6,
                 border=ft.Border.all(3, "#80000000"),
-                border_radius=ft.BorderRadius.all(50)
+                border_radius=50
             )
         )
 
@@ -58,7 +60,7 @@ async def main(page: ft.Page):
         content=player_content,
         left=get_pos(2, 0)[0],
         bottom=get_pos(2, 0)[1],
-        animate_position=100
+        animate_position=True
     )
 
     player_highlight = ft.Container(
@@ -67,13 +69,12 @@ async def main(page: ft.Page):
         bgcolor="#00FF0033",
         border_radius=15,
         opacity=0,
-        animate_opacity=200
+        animate_opacity=True
     )
 
-    # --- ДОСКА (только чередующиеся клетки, без линий сетки) ---
+    # --- ДОСКА ---
     stack_controls = []
 
-    # Чередующиеся чёрно-серые клетки (классическая шахматная расцветка в тёмной теме)
     for r in range(9):
         for c in range(5):
             color = "#0F0F0F" if (c + r) % 2 == 0 else "#1C1C1C"
@@ -118,7 +119,87 @@ async def main(page: ft.Page):
         drag_interval=10,
     )
 
-    # --- ЛОГИКА ---
+    # --- ТРЯСКА ЭКРАНА ---
+    async def shake_screen():
+        shakes = [20, -30, 20, -20, 10, -10, 0]
+        for offset_x in shakes:
+            layout.offset = ft.Offset(offset_x / GAME_WIDTH, 0)
+            layout.update()
+            await asyncio.sleep(0.05)
+        layout.offset = ft.Offset(0, 0)
+        layout.update()
+
+    # --- НЕОНОВАЯ ВСПЫШКА (оставлена) + НЕОНОВЫЙ СЧЁТ ОЧКОВ (вместо молний) ---
+    async def flash_and_points(x, y, points):
+        # Вспышка
+        flash = ft.Container(
+            width=100,
+            height=100,
+            left=x - 25,
+            top=y - 25,
+            bgcolor="#00FFFFFF",
+            border_radius=50,
+            shadow=ft.BoxShadow(blur_radius=60, spread_radius=15, color="#00FFFF"),
+            opacity=0,
+            scale=0.3,
+            animate_opacity=True,
+            animate_scale=True,
+        )
+        game_area.content.controls.append(flash)
+        page.update()
+
+        flash.opacity = 1
+        flash.scale = 1.8
+        flash.shadow = ft.BoxShadow(blur_radius=100, spread_radius=20, color="#FFFFFF")
+        page.update()
+
+        await asyncio.sleep(0.2)
+
+        flash.opacity = 0
+        flash.scale = 0.3
+        page.update()
+
+        await asyncio.sleep(0.3)
+        if flash in game_area.content.controls:
+            game_area.content.controls.remove(flash)
+        page.update()
+
+        # Неоновый текст очков (+10 или +20)
+        points_text = ft.Text(
+            f"+{points}",
+            size=50,
+            weight="bold",
+            color="#00FF00",
+            opacity=0,
+            scale=0.5,
+            left=x,
+            top=y - 30,
+            text_align="center",
+            shadow=ft.BoxShadow(blur_radius=20, color="#00FF00", offset=(0, 0)),
+            animate_opacity=True,
+            animate_scale=True,
+            animate_position=True,
+        )
+        game_area.content.controls.append(points_text)
+        page.update()
+
+        points_text.opacity = 1
+        points_text.scale = 1.5
+        points_text.top -= 60  # поднимается вверх
+        page.update()
+
+        await asyncio.sleep(0.6)
+
+        points_text.opacity = 0
+        points_text.scale = 0.5
+        page.update()
+
+        await asyncio.sleep(0.3)
+        if points_text in game_area.content.controls:
+            game_area.content.controls.remove(points_text)
+        page.update()
+
+    # --- ЛОГИКА ИГРЫ ---
     def game_over():
         state["running"] = False
         game_over_screen.content.controls[2].value = str(state["score"])
@@ -132,45 +213,6 @@ async def main(page: ft.Page):
         player_highlight.bottom = r * CELL_H + 20
         player_highlight.opacity = 0.4
         page.update()
-
-    def restart_game(e=None):
-        state["running"] = True
-        state["score"] = 0
-        state["speed"] = 3
-        state["p_col"] = 2
-        state["p_row"] = 0
-        state["is_moving"] = False
-        state["swipe_start"] = None
-
-        for enemy in state["enemies"][:]:
-            if enemy in game_area.content.controls:
-                game_area.content.controls.remove(enemy)
-        state["enemies"].clear()
-
-        score_text.value = "0"
-        player.left, player.bottom = get_pos(2, 0)
-        player.content.bgcolor = "#00FF00"
-        player.content.shadow.color = "#00FF00"
-        player.content.shadow.blur_radius = 15
-
-        update_player_highlight()
-        game_over_screen.visible = False
-        page.update()
-        asyncio.create_task(game_loop())
-
-    game_over_screen = ft.Container(
-        visible=False,
-        bgcolor="#E6000000",
-        alignment=ft.alignment.Alignment(0, 0),
-        content=ft.Column([
-            ft.Text("GAME OVER", size=26, color="#FF0000", weight="bold"),
-            ft.Text("Счет:", size=20, color="white"),
-            ft.Text("0", size=50, weight="bold", color="#00FF00"),
-            ft.FilledButton("ЗАНОВО", style=ft.ButtonStyle(bgcolor="#00FF00", color="black"), width=200, on_click=restart_game)
-        ], horizontal_alignment="center", alignment=ft.MainAxisAlignment.CENTER),
-        width=GAME_WIDTH,
-        height=GAME_HEIGHT
-    )
 
     def get_enemy_at_grid(target_col, target_row):
         target_bottom = (target_row * CELL_H) + 20
@@ -192,12 +234,18 @@ async def main(page: ft.Page):
         player.left, player.bottom = get_pos(c, r)
         update_player_highlight()
 
+        # Вспышка + очки
+        flash_x = enemy.left + PLAYER_SIZE / 2 - 50
+        flash_y = enemy.top + PLAYER_SIZE / 2 - 50
+        bonus = 20 if enemy.data["tag"] == "hunter" else 10
+        asyncio.create_task(flash_and_points(flash_x, flash_y, bonus))
+
         if enemy in state["enemies"]:
             state["enemies"].remove(enemy)
             if enemy in game_area.content.controls:
                 game_area.content.controls.remove(enemy)
 
-        state["score"] += 10
+        state["score"] += bonus
         score_text.value = str(state["score"])
 
         if combo_text:
@@ -268,6 +316,8 @@ async def main(page: ft.Page):
             jmp_c, jmp_r = cur_c + dir_x * 2, cur_r + dir_y * 2
             if 0 <= jmp_c <= 4 and 0 <= jmp_r <= 7:
                 asyncio.create_task(chain_kills(jmp_c, jmp_r, enemy))
+            else:
+                asyncio.create_task(shake_screen())
         else:
             asyncio.create_task(perform_step(tar_c, tar_r))
 
@@ -345,24 +395,69 @@ async def main(page: ft.Page):
                         game_area.content.controls.remove(enemy)
                     state["score"] += 1
                     score_text.value = str(state["score"])
-                    if state["score"] % 20 == 0:
-                        state["speed"] += 0.5
+
+                    if state["score"] >= 50 and not state["speed_doubled"]:
+                        state["speed"] *= 2
+                        state["speed_doubled"] = True
 
             page.update()
             await asyncio.sleep(0.02)
 
+    def restart_game(e=None):
+        state["running"] = True
+        state["score"] = 0
+        state["speed"] = 3.0
+        state["speed_doubled"] = False
+        state["p_col"] = 2
+        state["p_row"] = 0
+        state["is_moving"] = False
+        state["swipe_start"] = None
+
+        for enemy in state["enemies"][:]:
+            if enemy in game_area.content.controls:
+                game_area.content.controls.remove(enemy)
+        state["enemies"].clear()
+
+        score_text.value = "0"
+        player.left, player.bottom = get_pos(2, 0)
+        player.content.bgcolor = "#00FF00"
+        player.content.shadow.color = "#00FF00"
+        player.content.shadow.blur_radius = 15
+
+        update_player_highlight()
+        game_over_screen.visible = False
+        page.update()
+        asyncio.create_task(game_loop())
+
+    game_over_screen = ft.Container(
+        visible=False,
+        bgcolor="#E6000000",
+        alignment=ft.Alignment(0, 0),
+        content=ft.Column([
+            ft.Text("GAME OVER", size=26, color="#FF0000", weight="bold"),
+            ft.Text("Счет:", size=20, color="white"),
+            ft.Text("0", size=50, weight="bold", color="#00FF00"),
+            ft.FilledButton("ЗАНОВО", style=ft.ButtonStyle(bgcolor="#00FF00", color="black"), width=200, on_click=restart_game)
+        ], horizontal_alignment="center", alignment=ft.MainAxisAlignment.CENTER),
+        width=GAME_WIDTH,
+        height=GAME_HEIGHT
+    )
+
     layout = ft.Container(
         content=ft.Stack([game_area, game_over_screen]),
-        alignment=ft.alignment.Alignment(0, 0),
+        alignment=ft.Alignment(0, 0),
         bgcolor="#050505",
         width=GAME_WIDTH,
         height=GAME_HEIGHT,
         border=ft.Border.all(2, "#333333"),
-        border_radius=ft.BorderRadius.all(15),
-        clip_behavior=ft.ClipBehavior.HARD_EDGE
+        border_radius=15,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        offset=ft.Offset(0, 0),
+        animate_offset=True,
     )
 
-    page.add(ft.Container(content=layout, alignment=ft.alignment.Alignment(0, 0), expand=True))
+    page.add(ft.Container(content=layout, alignment=ft.Alignment(0, 0), expand=True))
+
     restart_game()
 
 if __name__ == "__main__":
