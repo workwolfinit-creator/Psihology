@@ -2,7 +2,6 @@ import flet as ft
 import asyncio
 import random
 
-
 async def main(page: ft.Page):
     # --- НАСТРОЙКИ ---
     page.title = "Neon Checkers | Hunter Mode"
@@ -13,13 +12,9 @@ async def main(page: ft.Page):
 
     GAME_WIDTH = 350
     GAME_HEIGHT = 650
-
-    # 5 КОЛОНОК
     COLS = [35, 105, 175, 245, 315]
     CELL_H = 70
-
     PLAYER_SIZE = 50
-    ENEMY_SIZE = 50
 
     state = {
         "running": False,
@@ -29,6 +24,7 @@ async def main(page: ft.Page):
         "p_row": 0,
         "enemies": [],
         "is_moving": False,
+        "swipe_start": None,
     }
 
     # --- ВИЗУАЛ ---
@@ -58,19 +54,68 @@ async def main(page: ft.Page):
         y = (row * CELL_H) + 20
         return x, y
 
-    start_x, start_y = get_pos(2, 0)
-
     player = ft.Container(
         content=player_content,
-        left=start_x,
-        bottom=start_y,
+        left=get_pos(2, 0)[0],
+        bottom=get_pos(2, 0)[1],
         animate_position=100
     )
 
-    game_area = ft.Stack(
-        controls=[score_text, combo_text, player],
-        width=GAME_WIDTH,
-        height=GAME_HEIGHT,
+    player_highlight = ft.Container(
+        width=70,
+        height=70,
+        bgcolor="#00FF0033",
+        border_radius=15,
+        opacity=0,
+        animate_opacity=200
+    )
+
+    # --- ДОСКА (только чередующиеся клетки, без линий сетки) ---
+    stack_controls = []
+
+    # Чередующиеся чёрно-серые клетки (классическая шахматная расцветка в тёмной теме)
+    for r in range(9):
+        for c in range(5):
+            color = "#0F0F0F" if (c + r) % 2 == 0 else "#1C1C1C"
+            stack_controls.append(
+                ft.Container(
+                    left=COLS[c] - 35,
+                    bottom=r * CELL_H + 20,
+                    width=70,
+                    height=70,
+                    bgcolor=color,
+                )
+            )
+
+    stack_controls.extend([score_text, combo_text, player_highlight, player])
+
+    game_stack = ft.Stack(controls=stack_controls, width=GAME_WIDTH, height=GAME_HEIGHT)
+
+    # --- СВАЙП-УПРАВЛЕНИЕ ---
+    def handle_pan_start(e: ft.DragStartEvent):
+        state["swipe_start"] = (e.local_position.x, e.local_position.y)
+
+    def handle_pan_end(e: ft.DragEndEvent):
+        if state["swipe_start"] is None or state["is_moving"] or not state["running"]:
+            return
+        start_x, start_y = state["swipe_start"]
+        end_x, end_y = e.local_position.x, e.local_position.y
+        state["swipe_start"] = None
+
+        dx = end_x - start_x
+        dy = end_y - start_y
+        threshold = 40
+
+        if abs(dx) >= threshold and abs(dy) >= threshold:
+            dir_x = 1 if dx > 0 else -1
+            dir_y = 1 if dy < 0 else -1
+            move_player(dir_x, dir_y)
+
+    game_area = ft.GestureDetector(
+        content=game_stack,
+        on_pan_start=handle_pan_start,
+        on_pan_end=handle_pan_end,
+        drag_interval=10,
     )
 
     # --- ЛОГИКА ---
@@ -78,6 +123,14 @@ async def main(page: ft.Page):
         state["running"] = False
         game_over_screen.content.controls[2].value = str(state["score"])
         game_over_screen.visible = True
+        player_highlight.opacity = 0
+        page.update()
+
+    def update_player_highlight():
+        c, r = state["p_col"], state["p_row"]
+        player_highlight.left = COLS[c] - 35
+        player_highlight.bottom = r * CELL_H + 20
+        player_highlight.opacity = 0.4
         page.update()
 
     def restart_game(e=None):
@@ -86,19 +139,21 @@ async def main(page: ft.Page):
         state["speed"] = 3
         state["p_col"] = 2
         state["p_row"] = 0
-        state["enemies"] = []
         state["is_moving"] = False
+        state["swipe_start"] = None
 
-        game_area.controls = [score_text, combo_text, player]
+        for enemy in state["enemies"][:]:
+            if enemy in game_area.content.controls:
+                game_area.content.controls.remove(enemy)
+        state["enemies"].clear()
 
         score_text.value = "0"
-        px, py = get_pos(2, 0)
-        player.left = px
-        player.bottom = py
-
+        player.left, player.bottom = get_pos(2, 0)
         player.content.bgcolor = "#00FF00"
         player.content.shadow.color = "#00FF00"
+        player.content.shadow.blur_radius = 15
 
+        update_player_highlight()
         game_over_screen.visible = False
         page.update()
         asyncio.create_task(game_loop())
@@ -111,85 +166,119 @@ async def main(page: ft.Page):
             ft.Text("GAME OVER", size=26, color="#FF0000", weight="bold"),
             ft.Text("Счет:", size=20, color="white"),
             ft.Text("0", size=50, weight="bold", color="#00FF00"),
-            ft.FilledButton("ЗАНОВО", style=ft.ButtonStyle(bgcolor="#00FF00", color="black"), width=200,
-                            on_click=restart_game)
+            ft.FilledButton("ЗАНОВО", style=ft.ButtonStyle(bgcolor="#00FF00", color="black"), width=200, on_click=restart_game)
         ], horizontal_alignment="center", alignment=ft.MainAxisAlignment.CENTER),
-        width=GAME_WIDTH, height=GAME_HEIGHT
+        width=GAME_WIDTH,
+        height=GAME_HEIGHT
     )
 
-    # --- ПОИСК ВРАГОВ ---
     def get_enemy_at_grid(target_col, target_row):
         target_bottom = (target_row * CELL_H) + 20
         target_top_y = GAME_HEIGHT - target_bottom - PLAYER_SIZE
-
         for enemy in state["enemies"]:
             enemy_cx = enemy.left + (PLAYER_SIZE / 2)
             grid_cx = COLS[target_col]
-
-            if abs(enemy_cx - grid_cx) < 20:
-                if abs(enemy.top - target_top_y) < 50:
-                    return enemy
+            if abs(enemy_cx - grid_cx) < 20 and abs(enemy.top - target_top_y) < 50:
+                return enemy
         return None
 
-    # --- ДВИЖЕНИЕ ИГРОКА ---
-    def move_player(dir_x, dir_y):
-        if not state["running"] or state["is_moving"]: return
+    async def perform_single_jump_kill(c, r, enemy, combo_text="KILL!"):
+        player.content.bgcolor = "#FFFFFF"
+        player.content.shadow.color = "#FFFFFF"
+        player.content.shadow.blur_radius = 40
+        page.update()
 
+        state["p_col"], state["p_row"] = c, r
+        player.left, player.bottom = get_pos(c, r)
+        update_player_highlight()
+
+        if enemy in state["enemies"]:
+            state["enemies"].remove(enemy)
+            if enemy in game_area.content.controls:
+                game_area.content.controls.remove(enemy)
+
+        state["score"] += 10
+        score_text.value = str(state["score"])
+
+        if combo_text:
+            asyncio.create_task(show_combo(enemy.left + 10, enemy.top + 10, combo_text))
+
+        page.update()
+        await asyncio.sleep(0.18)
+        player.content.bgcolor = "#00FF00"
+        player.content.shadow.color = "#00FF00"
+        player.content.shadow.blur_radius = 15
+        page.update()
+
+    async def chain_kills(initial_c, initial_r, initial_enemy):
+        if not state["running"]:
+            return
+        state["is_moving"] = True
+        combo_count = 0
+        current_c, current_r = state["p_col"], state["p_row"]
+        directions = [(-1, 1), (1, 1), (-1, -1), (1, -1)]
+
+        async def do_jump(jmp_c, jmp_r, enemy, combo_text):
+            nonlocal combo_count
+            combo_count += 1
+            await perform_single_jump_kill(jmp_c, jmp_r, enemy, combo_text)
+            extra = 10 * (combo_count - 1)
+            state["score"] += extra
+            score_text.value = str(state["score"])
+            page.update()
+
+            nonlocal current_c, current_r
+            current_c, current_r = jmp_c, jmp_r
+            state["p_col"], state["p_row"] = current_c, current_r
+            update_player_highlight()
+
+        await do_jump(initial_c, initial_r, initial_enemy, "KILL!")
+
+        while state["running"]:
+            possible = None
+            for dx, dy in directions:
+                mid_c = current_c + dx
+                mid_r = current_r + dy
+                if not (0 <= mid_c <= 4 and 0 <= mid_r <= 7):
+                    continue
+                enemy = get_enemy_at_grid(mid_c, mid_r)
+                if enemy:
+                    jmp_c = current_c + 2 * dx
+                    jmp_r = current_r + 2 * dy
+                    if 0 <= jmp_c <= 4 and 0 <= jmp_r <= 7:
+                        possible = (jmp_c, jmp_r, enemy)
+                        break
+            if not possible:
+                break
+            jmp_c, jmp_r, enemy = possible
+            await do_jump(jmp_c, jmp_r, enemy, f"{combo_count + 1}x KILL!")
+
+        state["is_moving"] = False
+
+    def move_player(dir_x, dir_y):
+        if not state["running"] or state["is_moving"]:
+            return
         cur_c, cur_r = state["p_col"], state["p_row"]
         tar_c, tar_r = cur_c + dir_x, cur_r + dir_y
-
-        if tar_c < 0 or tar_c > 4: return
-        if tar_r < 0 or tar_r > 7: return
+        if not (0 <= tar_c <= 4 and 0 <= tar_r <= 7):
+            return
 
         enemy = get_enemy_at_grid(tar_c, tar_r)
-
         if enemy:
-            # АТАКА (Прыжок)
-            jmp_c, jmp_r = cur_c + (dir_x * 2), cur_r + (dir_y * 2)
-
-            # ВАЖНО: Если прыгать некуда (стена или верх) - ничего не делаем.
-            # Это и есть "классика": нельзя бить у борта.
+            jmp_c, jmp_r = cur_c + dir_x * 2, cur_r + dir_y * 2
             if 0 <= jmp_c <= 4 and 0 <= jmp_r <= 7:
-                asyncio.create_task(perform_jump_kill(jmp_c, jmp_r, enemy))
+                asyncio.create_task(chain_kills(jmp_c, jmp_r, enemy))
         else:
-            # ОБЫЧНЫЙ ШАГ
             asyncio.create_task(perform_step(tar_c, tar_r))
 
     async def perform_step(c, r):
         state["is_moving"] = True
         state["p_col"], state["p_row"] = c, r
-        nx, ny = get_pos(c, r)
-        player.left, player.bottom = nx, ny
+        player.left, player.bottom = get_pos(c, r)
+        update_player_highlight()
         page.update()
         await asyncio.sleep(0.1)
         state["is_moving"] = False
-
-    async def perform_jump_kill(c, r, enemy):
-        state["is_moving"] = True
-
-        player.content.bgcolor = "#FFFFFF"
-        player.content.shadow.color = "#FFFFFF"
-        player.content.shadow.blur_radius = 40
-
-        state["p_col"], state["p_row"] = c, r
-        nx, ny = get_pos(c, r)
-        player.left, player.bottom = nx, ny
-
-        if enemy in state["enemies"]:
-            state["enemies"].remove(enemy)
-            if enemy in game_area.controls: game_area.controls.remove(enemy)
-            state["score"] += 10
-            score_text.value = str(state["score"])
-            asyncio.create_task(show_combo(enemy.left, enemy.top, "KILL!"))
-
-        page.update()
-        await asyncio.sleep(0.15)
-
-        player.content.bgcolor = "#00FF00"
-        player.content.shadow.color = "#00FF00"
-        player.content.shadow.blur_radius = 15
-        state["is_moving"] = False
-        page.update()
 
     async def show_combo(x, y, text):
         combo_text.value = text
@@ -197,37 +286,24 @@ async def main(page: ft.Page):
         combo_text.top = y
         combo_text.opacity = 1
         page.update()
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.4)
         combo_text.opacity = 0
         page.update()
 
-    # --- ЛОГИКА ОХОТНИКОВ (ORANGE HUNTERS) ---
     async def hunter_attack(enemy):
-        # Охотник прыгает на игрока
         enemy.content.bgcolor = "#FFFFFF"
         enemy.update()
-
-        # Прыжок в позицию игрока
         enemy.top = GAME_HEIGHT - player.bottom - PLAYER_SIZE
         enemy.left = player.left
         page.update()
-
         await asyncio.sleep(0.1)
         game_over()
 
     def spawn_enemy():
-        is_hunter = random.random() < 0.35  # 35% шанс Оранжевого
-
-        if is_hunter:
-            # Оранжевый Охотник
-            col = random.randint(0, 4)
-            color = "#FF8800"
-            tag = "hunter"
-        else:
-            # Красная пешка
-            col = random.randint(0, 4)
-            color = "#FF0044"
-            tag = "normal"
+        is_hunter = random.random() < 0.35
+        col = random.randint(0, 4)
+        color = "#FF8800" if is_hunter else "#FF0044"
+        tag = "hunter" if is_hunter else "normal"
 
         enemy = ft.Container(
             content=create_checker(color, color),
@@ -235,8 +311,7 @@ async def main(page: ft.Page):
             top=-60,
             data={"col": col, "tag": tag}
         )
-
-        game_area.controls.insert(1, enemy)
+        game_area.content.controls.insert(-1, enemy)
         state["enemies"].append(enemy)
 
     async def game_loop():
@@ -249,82 +324,39 @@ async def main(page: ft.Page):
                 spawn_timer = 0
 
             for enemy in state["enemies"][:]:
-                # Падение вниз
                 enemy.top += state["speed"]
 
-                # --- ЛОГИКА ОХОТНИКА ---
                 if enemy.data["tag"] == "hunter" and not state["is_moving"]:
-                    # Если игрок рядом по диагонали (снизу)
                     p_top_y = GAME_HEIGHT - player.bottom - PLAYER_SIZE
-                    p_col = state["p_col"]
-                    e_col = enemy.data["col"]
-
                     dist_y = p_top_y - enemy.top
+                    if 50 < dist_y < 120 and abs(state["p_col"] - enemy.data["col"]) == 1:
+                        await hunter_attack(enemy)
+                        return
 
-                    # Охотник атакует, если игрок чуть ниже (дистанция удара)
-                    if 50 < dist_y < 120:
-                        # И если игрок в соседней колонке
-                        if abs(p_col - e_col) == 1:
-                            await hunter_attack(enemy)
-                            return
-
-                # --- ОБЫЧНОЕ СТОЛКНОВЕНИЕ ---
                 if not state["is_moving"]:
                     ptop = GAME_HEIGHT - player.bottom - PLAYER_SIZE
-                    if abs(enemy.top - ptop) < 40:
-                        if abs(enemy.left - player.left) < 20:
-                            game_over()
-                            return
+                    if abs(enemy.top - ptop) < 40 and abs(enemy.left - player.left) < 20:
+                        game_over()
+                        return
 
-                # Удаление
                 if enemy.top > GAME_HEIGHT:
-                    if enemy in state["enemies"]: state["enemies"].remove(enemy)
-                    if enemy in game_area.controls: game_area.controls.remove(enemy)
+                    state["enemies"].remove(enemy)
+                    if enemy in game_area.content.controls:
+                        game_area.content.controls.remove(enemy)
                     state["score"] += 1
                     score_text.value = str(state["score"])
-                    if state["score"] % 20 == 0: state["speed"] += 0.5
+                    if state["score"] % 20 == 0:
+                        state["speed"] += 0.5
 
             page.update()
             await asyncio.sleep(0.02)
 
-    # --- УПРАВЛЕНИЕ (КНОПКИ) ---
-    def btn(icon, cb):
-        return ft.Container(
-            content=ft.Icon(icon, size=24, color="#FFFFFF88"),
-            width=55, height=55,
-            bgcolor="#11111188",
-            border=ft.Border.all(1, "#FFFFFF22"),
-            border_radius=ft.BorderRadius.all(10),
-            alignment=ft.alignment.Alignment(0, 0),
-            on_click=cb,
-        )
-
-    controls_layer = ft.Stack([
-        # СЛЕВА
-        ft.Container(
-            left=15, bottom=15,
-            content=ft.Column([
-                btn("north_west", lambda e: move_player(-1, 1)),
-                ft.Container(height=5),
-                btn("south_west", lambda e: move_player(-1, -1)),
-            ])
-        ),
-        # СПРАВА
-        ft.Container(
-            right=15, bottom=15,
-            content=ft.Column([
-                btn("north_east", lambda e: move_player(1, 1)),
-                ft.Container(height=5),
-                btn("south_east", lambda e: move_player(1, -1)),
-            ])
-        )
-    ], width=GAME_WIDTH, height=GAME_HEIGHT)
-
     layout = ft.Container(
-        content=ft.Stack([game_area, controls_layer, game_over_screen]),
+        content=ft.Stack([game_area, game_over_screen]),
         alignment=ft.alignment.Alignment(0, 0),
         bgcolor="#050505",
-        width=GAME_WIDTH, height=GAME_HEIGHT,
+        width=GAME_WIDTH,
+        height=GAME_HEIGHT,
         border=ft.Border.all(2, "#333333"),
         border_radius=ft.BorderRadius.all(15),
         clip_behavior=ft.ClipBehavior.HARD_EDGE
@@ -332,7 +364,6 @@ async def main(page: ft.Page):
 
     page.add(ft.Container(content=layout, alignment=ft.alignment.Alignment(0, 0), expand=True))
     restart_game()
-
 
 if __name__ == "__main__":
     ft.run(main)
