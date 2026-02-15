@@ -56,11 +56,12 @@ async def main(page: ft.Page):
         y = (row * CELL_H) + 20
         return x, y
 
+    # Быстрая анимация перемещения (50 мс вместо прежних 100-200)
     player = ft.Container(
         content=player_content,
         left=get_pos(2, 0)[0],
         bottom=get_pos(2, 0)[1],
-        animate_position=True
+        animate_position=50,  # очень быстро, но плавно
     )
 
     player_highlight = ft.Container(
@@ -69,7 +70,7 @@ async def main(page: ft.Page):
         bgcolor="#00FF0033",
         border_radius=15,
         opacity=0,
-        animate_opacity=True
+        animate_opacity=100
     )
 
     # --- ДОСКА ---
@@ -129,9 +130,8 @@ async def main(page: ft.Page):
         layout.offset = ft.Offset(0, 0)
         layout.update()
 
-    # --- НЕОНОВАЯ ВСПЫШКА (оставлена) + НЕОНОВЫЙ СЧЁТ ОЧКОВ (вместо молний) ---
+    # --- ВСПЫШКА + ОЧКИ ---
     async def flash_and_points(x, y, points):
-        # Вспышка
         flash = ft.Container(
             width=100,
             height=100,
@@ -164,7 +164,6 @@ async def main(page: ft.Page):
             game_area.content.controls.remove(flash)
         page.update()
 
-        # Неоновый текст очков (+10 или +20)
         points_text = ft.Text(
             f"+{points}",
             size=50,
@@ -185,7 +184,7 @@ async def main(page: ft.Page):
 
         points_text.opacity = 1
         points_text.scale = 1.5
-        points_text.top -= 60  # поднимается вверх
+        points_text.top -= 60
         page.update()
 
         await asyncio.sleep(0.6)
@@ -225,6 +224,7 @@ async def main(page: ft.Page):
         return None
 
     async def perform_single_jump_kill(c, r, enemy, combo_text="KILL!"):
+        # Короткая белая вспышка
         player.content.bgcolor = "#FFFFFF"
         player.content.shadow.color = "#FFFFFF"
         player.content.shadow.blur_radius = 40
@@ -233,6 +233,16 @@ async def main(page: ft.Page):
         state["p_col"], state["p_row"] = c, r
         player.left, player.bottom = get_pos(c, r)
         update_player_highlight()
+        page.update()
+
+        # Даем анимации отработать (очень коротко)
+        await asyncio.sleep(0.05)
+
+        # Возврат цвета
+        player.content.bgcolor = "#00FF00"
+        player.content.shadow.color = "#00FF00"
+        player.content.shadow.blur_radius = 15
+        page.update()
 
         # Вспышка + очки
         flash_x = enemy.left + PLAYER_SIZE / 2 - 50
@@ -250,13 +260,6 @@ async def main(page: ft.Page):
 
         if combo_text:
             asyncio.create_task(show_combo(enemy.left + 10, enemy.top + 10, combo_text))
-
-        page.update()
-        await asyncio.sleep(0.18)
-        player.content.bgcolor = "#00FF00"
-        player.content.shadow.color = "#00FF00"
-        player.content.shadow.blur_radius = 15
-        page.update()
 
     async def chain_kills(initial_c, initial_r, initial_enemy):
         if not state["running"]:
@@ -279,6 +282,9 @@ async def main(page: ft.Page):
             current_c, current_r = jmp_c, jmp_r
             state["p_col"], state["p_row"] = current_c, current_r
             update_player_highlight()
+
+            # Короткая пауза между прыжками в цепи (чтобы было видно анимацию)
+            await asyncio.sleep(0.08)
 
         await do_jump(initial_c, initial_r, initial_enemy, "KILL!")
 
@@ -319,6 +325,7 @@ async def main(page: ft.Page):
             else:
                 asyncio.create_task(shake_screen())
         else:
+            # Быстрый шаг с короткой анимацией
             asyncio.create_task(perform_step(tar_c, tar_r))
 
     async def perform_step(c, r):
@@ -327,7 +334,8 @@ async def main(page: ft.Page):
         player.left, player.bottom = get_pos(c, r)
         update_player_highlight()
         page.update()
-        await asyncio.sleep(0.1)
+        # Короткая пауза, чтобы анимация успела отработать
+        await asyncio.sleep(0.06)
         state["is_moving"] = False
 
     async def show_combo(x, y, text):
